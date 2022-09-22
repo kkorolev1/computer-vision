@@ -42,6 +42,7 @@ def check_test(data_dir):
     diff = abs(b_row - gt_b_row) + abs(b_col - gt_b_col) + \
         abs(r_row - gt_r_row) + abs(r_col - gt_r_col)
 
+    print(f"DIFF: {diff}")
     if diff > diff_max:
         res = 'Wrong answer'
     else:

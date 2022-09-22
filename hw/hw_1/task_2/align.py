@@ -1,70 +1,132 @@
-import matplotlib.pyplot as plt
+from scipy.signal import correlate2d
 from skimage.io import imread, imshow
 import numpy as np
 
 
 def crop_image(img, crop_rate):
-    return img[int(img.shape[0] * crop_rate): int(img.shape[0] * (1 - crop_rate)) + 1,
-           int(img.shape[1] * crop_rate): int(img.shape[1] * (1 - crop_rate)) + 1]
+    cut_h = int(img.shape[0] * crop_rate)
+    cut_w = int(img.shape[1] * crop_rate)
+    return img[cut_h: img.shape[0] - cut_h, cut_w: img.shape[1] - cut_w]
 
 
 def mse(img_pred, img_gt):
-    return np.linalg.norm(img_pred - img_gt)**2 / (img_pred.shape[0] * img_pred.shape[1])
+    return ((img_pred - img_gt)**2).sum() / (img_pred.shape[0] * img_pred.shape[1])
 
 
-def mse_shift_images(img1, img2, shift_range=15):
-    base = 2 * shift_range
-    shift_values = np.arange(-shift_range, shift_range + 1)
+def intersect_images(img1, img2, x, y):
+    left_cut, right_cut, top_cut, bottom_cut = (max(-y, 0), max(y, 0), max(-x, 0), max(x, 0))
+    height, width = img1.shape
+    out_img1 = img1[top_cut:height-bottom_cut, left_cut:width-right_cut]
+    out_img2 = img2[bottom_cut:height-top_cut, right_cut:width-left_cut]
+    return out_img1, out_img2
 
-    min_shift = 0
+
+def mse_find_shift(img1, img2, shift_x, shift_y):
+    """
+    :param img1: channel to shift
+    :param img2: base channel
+    :return: row_shift, col_shift
+    """
+
+    min_shift = (0, 0)
     min_err = float('inf')
-    res_img = None
 
-    for shift_x in shift_values:
-        for shift_y in shift_values:
-            img2_shifted = img2[base+shift_x:base+img2.shape[0] + shift_x, base+shift_y:base+img2.shape[1] + shift_y]
-            img1_cropped = img1[:img2_shifted.shape[0], :img2_shifted.shape[1]]
+    for x in np.arange(-shift_x, shift_x + 1):
+        for y in np.arange(-shift_y, shift_y + 1):
+            img1_shifted, img2_cropped = intersect_images(img1, img2, x, y)
 
-            mse_value = mse(img1_cropped, img2_shifted)
+            mse_value = mse(img1_shifted, img2_cropped)
             if mse_value < min_err:
                 min_err = mse_value
-                min_shift = (shift_x, shift_y)
-                res_img = img2_shifted
+                min_shift = (x, y)
 
-    return min_err, np.array(min_shift), res_img
+    return min_shift
+
+
+def cross_cor_find_shift(img1, img2, shift_x, shift_y):
+    """
+    :param img1: channel to shift
+    :param img2: base channel
+    :return: row_shift, col_shift
+    """
+
+    base_channel = np.zeros((img2.shape[0] + 2*shift_x, img2.shape[1] + 2*shift_y))
+    base_channel[shift_x:img2.shape[0]+shift_x, shift_y:img2.shape[1]+shift_y] = img2
+
+    correlated_img = correlate2d(base_channel, img1, mode='valid')
+
+    row_idx, col_idx = np.where(correlated_img == np.amax(correlated_img))
+    row_shift, col_shift = row_idx[0] - shift_x, col_idx[0] - shift_y
+
+    return row_shift, col_shift
+
+
+def find_shift(img1, img2, shift_x, shift_y):
+    """
+    :param img1: channel to shift
+    :param img2: base channel
+    :return: row_shift, col_shift
+    """
+    #return cross_cor_find_shift(img1, img2, shift_x, shift_y)
+    return mse_find_shift(img1, img2, shift_x, shift_y)
+
+
+def pyramid(img1, img2, threshold=500):
+    """
+    :param img1: channel to shift
+    :param img2: base channel
+    :return: row_shift, col_shift
+    """
+    if max(img1.shape) < threshold:
+        return find_shift(img1, img2, 10, 10)
+
+    cropped_img1 = img1[::2, ::2]
+    cropped_img2 = img2[::2, ::2]
+
+    new_shift_x, new_shift_y = pyramid(cropped_img1, cropped_img2, threshold)
+    return find_shift(img1, img2, 2*new_shift_x, 2*new_shift_y)
 
 
 def align(img, g_coord):
+    img = img.astype('float64')
     channel_h = img.shape[0] // 3
 
-    channel_1 = img[:channel_h, :]
-    channel_2 = img[channel_h:2 * channel_h, :]
-    channel_3 = img[2 * channel_h:3 * channel_h, :]
+    channel_b = img[:channel_h, :]
+    channel_g = img[channel_h:2 * channel_h, :]
+    channel_r = img[2 * channel_h:3 * channel_h, :]
 
     crop_rate = 0.07
 
-    channel_1 = crop_image(channel_1, crop_rate)
-    channel_2 = crop_image(channel_2, crop_rate)
-    channel_3 = crop_image(channel_3, crop_rate)
+    b = crop_image(channel_b, crop_rate)
+    g = crop_image(channel_g, crop_rate)
+    r = crop_image(channel_r, crop_rate)
 
-    min_err_gr, min_shift_gr, channel_r = mse_shift_images(channel_2, channel_1)
-    min_err_gb, min_shift_gb, channel_b = mse_shift_images(channel_2, channel_3)
+    shift_b = np.array(pyramid(b, g))
+    channel_b = np.roll(channel_b, shift_b, (0, 1))
+    b_coord = np.array(g_coord) - shift_b - np.array((channel_h, 0))
 
-    img_size = np.min([channel_r.shape, channel_b.shape], axis=1)
+    shift_r = np.array(pyramid(r, g))
+    channel_r = np.roll(channel_r, shift_r, (0, 1))
+    r_coord = np.array(g_coord) - shift_r + np.array((channel_h, 0))
 
     res_image = np.dstack((
-        channel_r[:img_size[0], :img_size[1]],
-        channel_2[:img_size[0], :img_size[1]],
-        channel_b[:img_size[0], :img_size[1]]
+        channel_r,
+        channel_g,
+        channel_b
     ))
 
-    return res_image.astype('uint8'), np.array(g_coord) + min_shift_gb, np.array(g_coord) + min_shift_gr
+    return res_image.astype('uint8'), b_coord, r_coord
 
 
-img = imread('tests/03_test_img_input/img.png')
-parts = open('tests/03_test_img_input/g_coord.csv').read().rstrip('\n').split(',')
-g_coord = (int(parts[0]), int(parts[1]))
+if __name__ == '__main__':
+    img = imread('tests/01_test_img_input/img.png')
+    parts = open('tests/01_test_img_input/g_coord.csv').read().rstrip('\n').split(',')
+    g_coord = (int(parts[0]), int(parts[1]))
 
-align(img, g_coord)
+    aligned_img, shift_b, shift_r = align(img, g_coord)
+
+    imshow(aligned_img)
+
+#%%
 
 #%%
