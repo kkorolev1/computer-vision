@@ -21,7 +21,7 @@ def intersect_images(img1, img2, x, y):
     return out_img1, out_img2
 
 
-def mse_find_shift(img1, img2, shift_x, shift_y):
+def mse_find_shift(img1, img2, shift_x_range, shift_y_range):
     """
     :param img1: channel to shift
     :param img2: base channel
@@ -31,8 +31,8 @@ def mse_find_shift(img1, img2, shift_x, shift_y):
     min_shift = (0, 0)
     min_err = float('inf')
 
-    for x in np.arange(-shift_x, shift_x + 1):
-        for y in np.arange(-shift_y, shift_y + 1):
+    for x in np.arange(*shift_x_range):
+        for y in np.arange(*shift_y_range):
             img1_shifted, img2_cropped = intersect_images(img1, img2, x, y)
 
             mse_value = mse(img1_shifted, img2_cropped)
@@ -61,14 +61,14 @@ def cross_cor_find_shift(img1, img2, shift_x, shift_y):
     return row_shift, col_shift
 
 
-def find_shift(img1, img2, shift_x, shift_y):
+def find_shift(img1, img2, shift_x_range, shift_y_range):
     """
     :param img1: channel to shift
     :param img2: base channel
     :return: row_shift, col_shift
     """
-    #return cross_cor_find_shift(img1, img2, shift_x, shift_y)
-    return mse_find_shift(img1, img2, shift_x, shift_y)
+    #    return cross_cor_find_shift(img1, img2, shift_x, shift_y)
+    return mse_find_shift(img1, img2, shift_x_range, shift_y_range)
 
 
 def pyramid(img1, img2, threshold=500):
@@ -78,13 +78,12 @@ def pyramid(img1, img2, threshold=500):
     :return: row_shift, col_shift
     """
     if max(img1.shape) < threshold:
-        return find_shift(img1, img2, 10, 10)
+        return find_shift(img1, img2, (-15, 16), (-15, 16))
 
     cropped_img1 = img1[::2, ::2]
     cropped_img2 = img2[::2, ::2]
-
-    new_shift_x, new_shift_y = pyramid(cropped_img1, cropped_img2, threshold)
-    return find_shift(img1, img2, 2*new_shift_x, 2*new_shift_y)
+    shift_x_range, shift_y_range = pyramid(cropped_img1, cropped_img2, threshold)
+    return find_shift(img1, img2, (2*shift_x_range-1, 2*shift_x_range+2), (2*shift_y_range-1, 2*shift_y_range+2))
 
 
 def align(img, g_coord):
@@ -119,13 +118,14 @@ def align(img, g_coord):
 
 
 if __name__ == '__main__':
-    img = imread('tests/01_test_img_input/img.png')
-    parts = open('tests/01_test_img_input/g_coord.csv').read().rstrip('\n').split(',')
+    from skimage.io import imsave
+    img = imread('tests/19_test_img_input/img.png')
+    parts = open('tests/19_test_img_input/g_coord.csv').read().rstrip('\n').split(',')
     g_coord = (int(parts[0]), int(parts[1]))
 
     aligned_img, shift_b, shift_r = align(img, g_coord)
 
-    imshow(aligned_img)
+    imsave('aligned_img.png', aligned_img)
 
 #%%
 
