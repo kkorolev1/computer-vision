@@ -29,40 +29,109 @@ def get_colored_img(raw_img):
     return np.dstack([raw_img * masks[..., channel_idx] for channel_idx in range(3)])
 
 
-def interpolate_channel(channel):
+def interpolate_channel(channel, mask):
+    channel = channel.astype('float64')
     filter = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]])
 
-    # считаем количество ненулевых соседей для каждого пикселя
-    num_nonzeros = correlate2d(channel > 0, filter)[1:1+channel.shape[0], 1:1+channel.shape[1]]
-    num_nonzeros[num_nonzeros == 0] = 1
+    NONE_VALUE = 1000
+    channel[~mask] = NONE_VALUE
+
+    # считаем количество непустых соседей для каждого пикселя
+    num_neighbours = correlate2d(channel != NONE_VALUE, filter)[1: channel.shape[0]+1, 1: channel.shape[1]+1]
+    num_neighbours[num_neighbours == 0] = 1
+    channel[~mask] = 0
 
     # интерполяция для каждого пикселя
-    interpolated_vals = correlate2d(channel, filter)[1:1+channel.shape[0], 1:1+channel.shape[1]] / num_nonzeros
+    interpolated_vals = correlate2d(channel, filter)[1: channel.shape[0]+1, 1: channel.shape[1]+1] // num_neighbours
+    channel[~mask] = interpolated_vals[~mask]
 
-    np.putmask(channel, channel == 0, np.around(interpolated_vals).astype('uint8'))
     return channel
 
 
 def bilinear_interpolation(colored_img):
+    masks = get_bayer_masks(colored_img.shape[0], colored_img.shape[1])
     return np.dstack((
-        interpolate_channel(colored_img[..., 0]),
-        interpolate_channel(colored_img[..., 1]),
-        interpolate_channel(colored_img[..., 2])
-    ))
+        interpolate_channel(colored_img[..., 0], masks[..., 0]),
+        interpolate_channel(colored_img[..., 1], masks[..., 1]),
+        interpolate_channel(colored_img[..., 2], masks[..., 2])
+    )).astype('uint8')
+
+
+def convolve(raw_img, i, j, filter, norm):
+    return (raw_img[i - 2: i + 3, j - 2: j + 3] * filter).sum() / norm
 
 
 def improved_interpolation(raw_img):
-    # (канал, тип пикселя в шаблоне)
+    channels = get_colored_img(raw_img).astype('float64')
+
+    r = channels[..., 0]
+    g = channels[..., 1]
+    b = channels[..., 2]
+
     filter_gr = np.array([[0,0,-1,0,0], [0,0,2,0,0], [-1,2,4,2,-1], [0,0,2,0,0], [0,0,-1,0,0]])
+    filter_gr_sum = filter_gr.sum()
+
     filter_gb = np.array([[0,0,-1,0,0], [0,0,2,0,0], [-1,2,4,2,-1], [0,0,2,0,0], [0,0,-1,0,0]])
+    filter_gb_sum = filter_gb.sum()
 
     filter_rg_rb = np.array([[0,0,.5,0,0], [0,-1,0,-1,0], [-1,4,5,4,-1], [0,-1,0,-1,0], [0,0,.5,0,0]])
-    filter_rg_br = np.array([[0,0,.5,0,0], [0,-1,0,-1,0], [-1,4,5,4,-1], [0,-1,0,-1,0], [0,0,.5,0,0]])
+    filter_rg_rb_sum = filter_rg_rb.sum()
+
+    filter_rg_br = np.array([[0,0,-1,0,0], [0,-1,4,-1,0], [.5,0,5,0,.5], [0,-1,4,-1,0], [0,0,-1,0,0]])
+    filter_rg_br_sum = filter_rg_br.sum()
+
     filter_rb_bb = np.array([[0,0,-1.5,0,0], [0,2,0,2,0], [-1.5,0,6,0,-1.5], [0,2,0,2,0], [0,0,-1.5,0,0]])
+    filter_rb_bb_sum = filter_rb_bb.sum()
 
     filter_bg_br = np.array([[0,0,.5,0,0], [0,-1,0,-1,0], [-1,4,5,4,-1], [0,-1,0,-1,0], [0,0,.5,0,0]])
-    filter_bg_rb = np.array([[0,0,.5,0,0], [0,-1,0,-1,0], [-1,4,5,4,-1], [0,-1,0,-1,0], [0,0,.5,0,0]])
+    filter_bg_br_sum = filter_bg_br.sum()
+
+    filter_bg_rb = np.array([[0,0,-1,0,0], [0,-1,4,-1,0], [.5,0,5,0,.5], [0,-1,4,-1,0], [0,0,-1,0,0]])
+    filter_bg_rb_sum = filter_bg_rb.sum()
+
     filter_br_rr = np.array([[0,0,-1.5,0,0], [0,2,0,2,0], [-1.5,0,6,0,-1.5], [0,2,0,2,0], [0,0,-1.5,0,0]])
+    filter_br_rr_sum = filter_br_rr.sum()
+
+    for i in range(2, raw_img.shape[0] - 2):
+        for j in range(2, raw_img.shape[1] - 2):
+            if i % 2 == 0 and j % 2 == 0:
+                r[i, j] = convolve(raw_img, i, j, filter_rg_rb, filter_rg_rb_sum)
+                b[i, j] = convolve(raw_img, i, j, filter_bg_rb, filter_bg_rb_sum)
+            elif i % 2 == 1 and j % 2 == 1:
+                r[i, j] = convolve(raw_img, i, j, filter_rg_br, filter_rg_br_sum)
+                b[i, j] = convolve(raw_img, i, j, filter_bg_br, filter_bg_br_sum)
+            elif i % 2 == 0 and j % 2 == 1:
+                g[i, j] = convolve(raw_img, i, j, filter_gr, filter_gr_sum)
+                b[i, j] = convolve(raw_img, i, j, filter_br_rr, filter_br_rr_sum)
+            else:
+                g[i, j] = convolve(raw_img, i, j, filter_gb, filter_gb_sum)
+                r[i, j] = convolve(raw_img, i, j, filter_rb_bb, filter_rb_bb_sum)
+
+    '''for i in range(2, raw_img.shape[0] - 2, 2):
+        for j in range(3, raw_img.shape[1] - 2, 2):
+            g[i, j] = convolve(raw_img, i, j, filter_gr, filter_gr_sum)
+            b[i, j] = convolve(raw_img, i, j, filter_br_rr, filter_br_rr_sum)
+
+    for i in range(3, raw_img.shape[0] - 2, 2):
+        for j in range(2, raw_img.shape[1] - 2, 2):
+            g[i, j] = convolve(raw_img, i, j, filter_gb, filter_gb_sum)
+            r[i, j] = convolve(raw_img, i, j, filter_rb_bb, filter_rb_bb_sum)
+
+    for i in range(2, raw_img.shape[0] - 2, 2):
+        for j in range(2, raw_img.shape[1] - 2, 2):
+            r[i, j] = convolve(raw_img, i, j, filter_rg_rb, filter_rg_rb_sum)
+            b[i, j] = convolve(raw_img, i, j, filter_bg_rb, filter_bg_rb_sum)
+  
+    for i in range(3, raw_img.shape[0] - 2, 2):
+        for j in range(3, raw_img.shape[1] - 2, 2):
+            r[i, j] = convolve(raw_img, i, j, filter_rg_br, filter_rg_br_sum)
+            b[i, j] = convolve(raw_img, i, j, filter_bg_br, filter_bg_br_sum)'''
+
+    r = np.clip(r, 0, 255)
+    g = np.clip(g, 0, 255)
+    b = np.clip(b, 0, 255)
+
+    return np.dstack((r, g, b)).astype('uint8')
 
 
 def mse(img_pred, img_gt):
@@ -78,45 +147,11 @@ def compute_psnr(img_pred, img_gt):
     return 10 * np.log10((np.max(img_gt) ** 2) / mse_err)
 
 
-from skimage.io import imread, imshow
-import matplotlib.pyplot as plt
-#colored_img = get_colored_img(np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]], dtype='uint8'))
-#print(colored_img[..., 0])
-#print(colored_img[..., 1])
-#print(colored_img[..., 2])
-#interp = bilinear_interpolation(colored_img)
-#print(interp[1, 1])
-
-raw_img = img_as_ubyte(imread('tests/04_unittest_bilinear_img_input/02.png'))
-img = img_as_ubyte(bilinear_interpolation(get_colored_img(raw_img)))
-#imshow(img)
-
-gt_img = img_as_ubyte(imread('tests/04_unittest_bilinear_img_input/gt_02.png'))
-
-r = slice(1, -1), slice(1, -1)
-
-#f, axes = plt.subplots(1, 2)
-#axes[0].imshow(img[r])
-#axes[1].imshow(gt_img[r])
-
-
-img_pred = np.array([[[146, 222, 187],
-                   [254, 123,  38],
-                   [ 57, 255, 135]],
-                  [[230, 176, 213],
-                   [114,  38, 184],
-                   [ 47, 212,  52]],
-                  [[100, 111, 170],
-                   [ 52, 230, 182],
-                   [213,  50, 197]]], dtype='uint8')
-img_gt = np.array([[[254,  60,   6],
-                 [216,  53,  14],
-                 [106, 185, 239]],
-                [[121,  34,  29],
-                 [ 49, 139, 149],
-                 [  6, 159, 221]],
-                [[240,  53, 124],
-                 [  3, 194, 227],
-                 [ 84,  12, 218]]], dtype='uint8')
-
-print(compute_psnr(img_pred, img_gt))
+if __name__ == "__main__":
+    raw_img = np.array([[8, 5, 3, 7, 1, 3],
+                     [5, 2, 6, 8, 8, 1],
+                     [9, 9, 8, 1, 6, 4],
+                     [9, 4, 2, 3, 6, 8],
+                     [5, 4, 3, 2, 8, 7],
+                     [7, 3, 3, 6, 9, 3]], dtype='uint8')
+    improved_interpolation(raw_img)
