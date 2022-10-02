@@ -1,0 +1,6 @@
+**/tests/**
+**/.DS_Store
+**/.idea/**
+**/*.png
+**/__pycache__/**
+**/*.zip
