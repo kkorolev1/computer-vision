@@ -2,16 +2,16 @@
 # -*- coding: utf-8 -*-
 import sys
 import os.path
-from scipy.misc import imread
+from skimage.io import imread
 import numpy as np
-from PyQt4 import QtCore, QtGui, uic
+from PyQt5 import QtCore, QtGui, QtWidgets, uic
 from seam_carve import seam_carve
 Ui_MainWindow, QtBaseClass = uic.loadUiType('./guiwindow.ui')
 
 
-class Viewer(QtGui.QWidget):
+class Viewer(QtWidgets.QWidget):
     def __init__(self, parent=None):
-        super(QtGui.QWidget, self).__init__(parent)
+        super().__init__(parent)
         self.INIT_IMAGE = np.ones([350, 350, 3], np.uint8) * 255
         self.INIT_MASK = np.zeros(self.INIT_IMAGE.shape, np.int8)
         self.SAVE_COLOR = np.array([0, 127, 0])
@@ -98,10 +98,10 @@ class Viewer(QtGui.QWidget):
         self.parent().alignToImage(self.image.shape)
 
 
-class Gui(QtGui.QMainWindow, Ui_MainWindow):
+class Gui(QtWidgets.QMainWindow, Ui_MainWindow):
 
     def __init__(self, cfgpath):
-        QtGui.QMainWindow.__init__(self)
+        QtWidgets.QMainWindow.__init__(self)
         Ui_MainWindow.__init__(self)
 
         self.configpath = cfgpath
@@ -115,9 +115,9 @@ class Gui(QtGui.QMainWindow, Ui_MainWindow):
                    self.vertDownBtn, self.vertDownLargeBtn, self.vertUpBtn, self.vertUpLargeBtn]
         sigmap = QtCore.QSignalMapper(self)
         for i in range(len(btnlist)):
-            self.connect(btnlist[i], QtCore.SIGNAL("clicked()"), sigmap, QtCore.SLOT("map()"))
+            btnlist[i].clicked.connect(sigmap.map)
             sigmap.setMapping(btnlist[i], i)
-        self.connect(sigmap, QtCore.SIGNAL("mapped(int)"), self.paint.handleScaleBtn)
+        sigmap.mapped[int].connect(self.paint.handleScaleBtn)
 
         self.alignToImage(self.paint.image.shape)
         self.brushsize = self.brushSizeSB.value()
@@ -137,7 +137,7 @@ class Gui(QtGui.QMainWindow, Ui_MainWindow):
                 self.paint.changeMask(pos, value, self.brushsize)
             elif event.buttons() & QtCore.Qt.RightButton:
                 self.paint.changeMask(pos, 0, self.brushsize)
-        return QtGui.QMainWindow.mouseMoveEvent(self, event)
+        return QtWidgets.QMainWindow.mouseMoveEvent(self, event)
 
     def mousePressEvent(self, event):
         return self.mouseMoveEvent(event)
@@ -152,8 +152,8 @@ class Gui(QtGui.QMainWindow, Ui_MainWindow):
 
     def loadImage(self, filename=''):
         if type(filename) != str or filename == '':
-            filename = QtGui.QFileDialog.getOpenFileName(self, 'Open file', 
-                                                         QtCore.QDir.currentPath())
+            filename = QtWidgets.QFileDialog.getOpenFileName(self, 'Open file', 
+                                                         QtCore.QDir.currentPath())[0]
         if filename != '':
             img = imread(filename)
             self.alignToImage(img.shape)
@@ -194,9 +194,10 @@ def saveConfig(filename, params):
     with open(filename, 'w') as fhandle:
         print('image=%s\nbrush=%d' % params, file=fhandle)
 
-app = QtGui.QApplication.instance()
+
+app = QtWidgets.QApplication.instance()
 if not app:
-    app = QtGui.QApplication(sys.argv)
+    app = QtWidgets.QApplication(sys.argv)
 app.aboutToQuit.connect(app.deleteLater)
 configpath = os.path.dirname(os.path.abspath(__file__)) + '/gui.config'
 window = Gui(configpath)

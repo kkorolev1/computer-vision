@@ -1,28 +1,27 @@
 import numpy as np
 from scipy.signal import convolve2d
-from skimage.color import rgb2gray
-from skimage.io import imshow
 
 
-def delete_vert_seam(image, idxs):
-    mask = np.ones_like(image).astype('bool')
-    mask[np.arange(image.shape[0]), idxs] = False
-    return image[mask].reshape(image.shape[0], image.shape[1] - 1), ~mask
+def delete_vert_seam(image, mask):
+    return image[~mask.astype('bool')].reshape(image.shape[0], image.shape[1] - 1)
 
 
-def delete_seam(image, idxs, axis):
+def delete_seam(image, mask, axis):
+    if len(image.shape) == 3:
+        return np.dstack((delete_seam(image[..., 0], mask, axis),
+                          delete_seam(image[..., 1], mask, axis),
+                          delete_seam(image[..., 2], mask, axis)))
     if axis == 0:
-        new_image, mask = delete_vert_seam(image.T, idxs)
-        return new_image.T, mask.T
-    return delete_vert_seam(image, idxs)
+        return delete_vert_seam(image.T, mask.T).T
+    return delete_vert_seam(image, mask)
 
 
 def get_energy(input_image):
-    x_filter = np.array([[0,0,0], [1,0,-1], [0,0,0]])
-    y_filter = np.array([[0,1,0], [0,0,0], [0,-1,0]])
+    x_filter = np.array([[0,0,0], [-1,0,1], [0,0,0]])
+    y_filter = np.array([[0,-1,0], [0,0,0], [0,1,0]])
 
-    dx = convolve2d(input_image, x_filter, boundary="symm", mode="same")
-    dy = convolve2d(input_image, y_filter, boundary="symm", mode="same")
+    dx = convolve2d(input_image, x_filter[::-1, ::-1], boundary="symm", mode="same")
+    dy = convolve2d(input_image, y_filter[::-1, ::-1], boundary="symm", mode="same")
 
     return np.sqrt(dx ** 2 + dy**2).astype('float64')
 
@@ -59,6 +58,48 @@ def find_seam(input_image, mask, axis):
     return find_vert_seam(brightness, mask) if axis == 1 else find_vert_seam(brightness.T, mask.T).T
 
 
+def shrink(input_image, mask, axis):
+    seam_mask = find_seam(input_image, mask, axis)
+    return delete_seam(input_image, seam_mask, axis), delete_seam(mask, seam_mask, axis), seam_mask
+
+
+def add_vert_seam(image, mask, constant=0):
+    new_image = np.pad(image, ((0,0),(0,1)))
+
+    new_image[:, -1] = new_image[:, -2]
+    new_mask = np.pad(mask, ((0,0), (0,1)))
+
+    new_seam_mask = np.roll(new_mask, 1, axis=1)
+    new_seam_values = (new_image * (new_mask + new_seam_mask)).sum(axis=1) / 2
+    seam_image = new_seam_mask * new_seam_values.reshape(-1,1)
+
+    cumsum = np.cumsum(mask[::-1,::-1], axis=1)[::-1,::-1]
+
+    left_image = np.pad(image * cumsum, ((0,0),(0,1)))
+
+    new_image[:, -1] = 0
+    right_image = np.roll(new_image * np.pad(1 - cumsum, ((0,0),(0,1))), 1, axis=1)
+
+    return (left_image + seam_image + right_image) + new_mask * constant
+
+
+def add_seam(image, mask, axis, constant=0):
+    if len(image.shape) == 3:
+        return np.dstack((add_seam(image[..., 0], mask, axis, constant),
+                          add_seam(image[..., 1], mask, axis, constant),
+                          add_seam(image[..., 2], mask, axis, constant)))
+    if axis == 0:
+        return add_vert_seam(image.T, mask.T, constant).T
+    return add_vert_seam(image, mask, constant)
+
+
+def expand(input_image, mask, axis):
+    seam_mask = find_seam(input_image, mask, axis)
+    return add_seam(input_image, seam_mask, axis), \
+           add_seam(mask, seam_mask, axis), \
+           seam_mask
+
+
 def seam_carve(input_image, mode, mask=None):
     """
     :param input_image: Input image
@@ -66,24 +107,16 @@ def seam_carve(input_image, mode, mask=None):
     :param mask: Mask for image. -1 means deletion, 1 means conservation, 0 means no energy is changed
     :return:
     """
-    HORIZONTAL_SHRINK_MODE = "horizontal shrink"
-    VERTICAL_SHRINK_MODE = "vertical shrink"
-    HORIZONTAL_EXPAND_MODE = "horizontal expand"
-    VERTICAL_EXPAND_MODE = "vertical expand"
 
     if mask is None:
         mask = np.zeros(input_image.shape[:2])
 
-    if mode == HORIZONTAL_SHRINK_MODE or mode == VERTICAL_SHRINK_MODE:
-        axis = 1 if mode == HORIZONTAL_SHRINK_MODE else 0
-        seam_mask = find_seam(input_image, mask, axis=axis)
-        return None, None, seam_mask
-        #shrinked_mask, seam_mask = delete_seam(mask, seam, axis=axis)
-        #return np.dstack((r, g, b)).astype('uint8'), shrinked_mask, seam_mask.astype('uint8')
+    axis = 1 if "horizontal" in mode else 0
 
-    axis = 1 if mode == HORIZONTAL_EXPAND_MODE else 0
-    seam_mask = find_seam(input_image, mask, axis=axis)
-    return None, None, seam_mask
+    if "shrink" in mode:
+        return shrink(input_image, mask, axis)
+    else:
+        return expand(input_image, mask, axis)
 
 
 if __name__ == "__main__":
@@ -100,22 +133,8 @@ if __name__ == "__main__":
     from pickle import dump, load
 
     img = imread("tests/01_test_img_input/img.png")
+    imshow(img)
     mask = convert_img_to_mask(imread("tests/01_test_img_input/mask.png"))
     new_image, new_mask, seam_mask = seam_carve(img, 'horizontal shrink', mask)
 
-    with open("output.txt", "w") as f:
-        np.savetxt(f, seam_mask, fmt='%d')
-
-    with open("tests/01_test_img_gt/seams", "rb") as f:
-        seams = load(f)
-        mask = np.zeros(img.shape[:2])
-        rows = [s[0] for s in seams]
-        cols = [s[1] for s in seams]
-        mask[rows, cols] = 1
-
-        with open("gt.txt", "w") as f2:
-            np.savetxt(f2, mask, fmt='%d')
-
-    #print(seam_mask)
-    #imshow(res[0])
 #%%
