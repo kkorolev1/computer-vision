@@ -9,7 +9,7 @@ from numpy.linalg import inv
 DEFAULT_TRANSFORM = ProjectiveTransform
 
 
-def find_orb(img, n_keypoints=500):
+def find_orb(img, n_keypoints=1000):
     """Find keypoints and their descriptors in image.
 
     img ((W, H, 3)  np.ndarray) : 3-channel image
@@ -224,7 +224,7 @@ def merge_pano(image_collection, final_center_warps, output_shape):
     result_mask = np.zeros(output_shape, dtype=np.bool8)
 
     for image, transform in zip(image_collection, final_center_warps):
-        transformed_image, mask = warp_image(image, ProjectiveTransform(inv(transform)), output_shape)
+        transformed_image, mask = warp_image(image, ProjectiveTransform(inv(transform.params)), output_shape)
         mask &= ~result_mask
         transformed_image = np.dstack((transformed_image[...,0] * mask, transformed_image[...,1] * mask, transformed_image[...,2] * mask))
         result_mask |= mask
@@ -244,10 +244,15 @@ def get_gaussian_pyramid(image, n_layers, sigma):
 
     """
     # your code here
-    pass
+    image_copy = image.copy()
+    res = []
+    for i in range(n_layers):
+        res.append(image_copy)
+        image_copy = gaussian(image_copy, sigma)
+    return tuple(res)
 
 
-def get_laplacian_pyramid(image, n_layers, sigma):
+def get_laplacian_pyramid(image, n_layers=4, sigma=1):
     """Get Laplacian pyramid
 
     image ((W, H, 3)  np.ndarray) : original image
@@ -257,8 +262,13 @@ def get_laplacian_pyramid(image, n_layers, sigma):
     Returns:
         tuple(n_layers) Laplacian pyramid
     """
-    # your code here
-    pass
+    pyramid = list(get_gaussian_pyramid(image, n_layers, sigma))
+    res = [pyramid[-1]]
+
+    for i in range(n_layers - 2, -1, -1):
+        res.append(pyramid[i] - pyramid[i+1])
+
+    return tuple(res)
 
 
 def merge_laplacian_pyramid(laplacian_pyramid):
@@ -286,7 +296,7 @@ def increase_contrast(image_collection):
     return result
 
 
-def gaussian_merge_pano(image_collection, final_center_warps, output_shape, n_layers, image_sigma, merge_sigma):
+def gaussian_merge_pano(image_collection, final_center_warps, output_shape, n_layers=4, image_sigma=2, merge_sigma=8):
     """ Merge the whole panorama using Laplacian pyramid
 
     image_collection (Tuple[N]) : list of all images
@@ -299,8 +309,33 @@ def gaussian_merge_pano(image_collection, final_center_warps, output_shape, n_la
     Returns:
         (output_shape) np.ndarray: final pano
     """
-    # your code here
-    pass
+    result = np.zeros(output_shape + (3,))
+    result_mask = np.zeros(output_shape, dtype=np.bool8)
+
+    for i in range(len(image_collection)):
+        image, mask = warp_image(image_collection[i], ProjectiveTransform(inv(final_center_warps[i].params)),
+                                 output_shape)
+
+        border_mask = np.ones(output_shape, dtype=bool)
+        middler = np.nonzero((result_mask & mask).any(axis=0))
+        border = (middler[0][0] + middler[0][-1]) // 2 if middler[0].size != 0 else 0
+        border_mask[:, :border] = 0
+
+        image_pyramid = get_laplacian_pyramid(image, n_layers, image_sigma)
+        result_pyramid = get_laplacian_pyramid(result, n_layers, image_sigma)
+        mask_pyramid = get_gaussian_pyramid(border_mask.astype(float), n_layers, merge_sigma)
+        pyramid_masked = []
+        for j in range(n_layers):
+            image_pyramid_masked = np.dstack([image_pyramid[j][...,0] * mask_pyramid[j], image_pyramid[j][...,1] * mask_pyramid[j], image_pyramid[j][...,2] * mask_pyramid[j]])
+            result_pyramid_masked = np.dstack([result_pyramid[j][...,0] * (1 - mask_pyramid[j]), result_pyramid[j][...,1] * (1 - mask_pyramid[j]),
+                             result_pyramid[j][...,2] * (1 - mask_pyramid[j])])
+            pyramid_masked.append(image_pyramid_masked + result_pyramid_masked)
+
+        result_mask |= (~result_mask) & mask
+        result = merge_laplacian_pyramid(pyramid_masked)
+
+    return np.clip(np.rint(result * 255), 0, 255).astype('uint8')
+
 
 def cylindrical_inverse_map(coords, h, w, scale):
     """Function that transform coordinates in the output image
@@ -317,8 +352,15 @@ def cylindrical_inverse_map(coords, h, w, scale):
     Returns:
         (M, 2) np.ndarray : corresponding coordinates of input image (M == col * row) according to cylindrical transform
     """
-    # your code here
-    pass
+    K = np.array([[scale, 0, w / 2],
+                  [0, scale, h / 2],
+                  [0, 0, 1]])
+    C = np.row_stack([coords.T, np.ones((coords.shape[0]), )])
+    C_hat = inv(K) @ C
+
+    B = np.stack((np.tan(C_hat[0,:]), C_hat[1,:] / np.cos(C_hat[0,:]), np.ones((coords.shape[0]), )), axis=0)
+    return (K @ B)[:2,:].T
+
 
 def warp_cylindrical(img, scale=None, crop=True):
     """Warp image to cylindrical coordinates
@@ -331,14 +373,24 @@ def warp_cylindrical(img, scale=None, crop=True):
         (H, W, 3)  np.ndarray : warped image (H and W may differ from original)
     """
     # your code here
-    pass
+    h = img.shape[0]
+    w = img.shape[1]
+
+    scale = w * .5 if scale is None else scale
+    result = warp(img, cylindrical_inverse_map, map_args={'h': h, 'w': w, 'scale': scale}, output_shape=img.shape)
+
+    if not crop:
+        return result
+
+    y_nonzero, x_nonzero = np.nonzero(rgb2gray(result))
+    return result[np.min(y_nonzero): np.max(y_nonzero), np.min(x_nonzero): np.max(x_nonzero), :]
 
 
 # Pick a good scale value for the 5 test image sets
 cylindrical_scales = {
-    0: None,
-    1: None,
-    2: None,
-    3: None,
-    4: None,
+    0: 1000,
+    1: 2000,
+    2: 1000,
+    3: 2000,
+    4: 700,
 }
