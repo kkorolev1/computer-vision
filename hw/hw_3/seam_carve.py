@@ -54,7 +54,7 @@ def find_vert_seam(brightness, mask):
 
 
 def find_seam(input_image, mask, axis):
-    brightness = (0.299 * input_image[:, :, 0] + 0.587 * input_image[:, :, 1] + 0.114 * input_image[:, :, 2]).astype("float64")
+    brightness = (0.299 * input_image[..., 0] + 0.587 * input_image[..., 1] + 0.114 * input_image[..., 2]).astype("float64")
     return find_vert_seam(brightness, mask) if axis == 1 else find_vert_seam(brightness.T, mask.T).T
 
 
@@ -83,7 +83,7 @@ def add_vert_seam(image, mask, constant=0):
     return (left_image + seam_image + right_image) + new_mask * constant
 
 
-def add_seam(image, mask, axis, constant=0):
+def add_seam(image, mask, axis, constant=1):
     if len(image.shape) == 3:
         return np.dstack((add_seam(image[..., 0], mask, axis, constant),
                           add_seam(image[..., 1], mask, axis, constant),

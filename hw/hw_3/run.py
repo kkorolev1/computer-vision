@@ -1,77 +1,77 @@
 #!/usr/bin/env python3
 
-from json import dumps, load
+from math import floor
 from os import environ
 from os.path import join
-from sys import argv, exit
-
-
-def run_single_test(data_dir, output_dir):
-    from align import align
-    from numpy import ndarray
-    from skimage.io import imread, imsave
-    parts = open(join(data_dir, 'g_coord.csv')).read().rstrip('\n').split(',')
-    g_coord = (int(parts[0]), int(parts[1]))
-    img = imread(join(data_dir, 'img.png'), plugin='matplotlib')
-
-    n_rows, n_cols = img.shape[:2]
-    min_n_rows, min_n_cols = n_rows / 4.5, n_cols / 1.5
-    aligned_img, (b_row, b_col), (r_row, r_col) = align(img, g_coord)
-
-    assert type(aligned_img) is ndarray, 'aligned image is not ndarray'
-    n_rows, n_cols = aligned_img.shape[:2]
-    assert n_rows > min_n_rows and n_cols > min_n_cols, 'aligned image is too small'
-
-    with open(join(output_dir, 'output.csv'), 'w') as fhandle:
-        print('%d,%d,%d,%d' % (b_row, b_col, r_row, r_col), file=fhandle)
-
-    imsave(join(output_dir, 'aligned_img.png'), aligned_img)
+from sys import argv
 
 
 def check_test(data_dir):
-
-    with open(join(data_dir, 'output/output.csv')) as fhandle:
-        parts = fhandle.read().rstrip('\n').split(',')
-        b_row, b_col, r_row, r_col = map(int, parts)
-
-    with open(join(data_dir, 'gt/gt.csv')) as fhandle:
-        parts = fhandle.read().rstrip('\n').split(',')
-        coords = map(int, parts[1:])
-        gt_b_row, gt_b_col, _, _, gt_r_row, gt_r_col, diff_max = coords
-
-    diff = abs(b_row - gt_b_row) + abs(b_col - gt_b_col) + \
-        abs(r_row - gt_r_row) + abs(r_col - gt_r_col)
-
-    print(f"DIFF: {diff}")
-    if diff > diff_max:
-        res = 'Wrong answer'
-    else:
-        res = 'Ok'
+    from pickle import load
+    output_dir = join(data_dir, 'output')
+    gt_dir = join(data_dir, 'gt')
+    correct = 0
+    with open(join(output_dir, 'output_seams'), 'rb') as fout, \
+         open(join(gt_dir, 'seams'), 'rb') as fgt:
+        for i in range(8):
+            if load(fout) == load(fgt):
+                correct += 1
+    res = 'Ok %d/8' % correct
     if environ.get('CHECKER'):
         print(res)
     return res
 
 
 def grade(data_path):
+    from json import load, dumps
     results = load(open(join(data_path, 'results.json')))
     ok_count = 0
     for result in results:
-        if result['status'] == 'Ok':
-            ok_count += 1
-    total_count = len(results)
+        r = result['status']
+        if r.startswith('Ok'):
+            ok_count += int(r[3:4])
+    total_count = len(results) * 8
+    mark = floor(ok_count / total_count / 0.1)
     description = '%02d/%02d' % (ok_count, total_count)
-    mark = ok_count / total_count * 10
     res = {'description': description, 'mark': mark}
     if environ.get('CHECKER'):
         print(dumps(res))
     return res
 
 
+def run_single_test(data_dir, output_dir):
+    from numpy import where
+    from os.path import join
+    from pickle import dump
+    from seam_carve import seam_carve
+    from skimage.io import imread
+
+    def get_seam_coords(seam_mask):
+        coords = where(seam_mask)
+        t = [i for i in zip(coords[0], coords[1])]
+        t.sort(key=lambda i: i[0])
+        return tuple(t)
+
+    def convert_img_to_mask(img):
+        return ((img[:, :, 0] != 0) * -1 + (img[:, :, 1] != 0)).astype('int8')
+
+    img = imread(join(data_dir, 'img.png'))
+    mask = convert_img_to_mask(imread(join(data_dir, 'mask.png')))
+
+    with open(join(output_dir, 'output_seams'), 'wb') as fhandle:
+        for m in (None, mask):
+            for direction in ('shrink', 'expand'):
+                for orientation in ('horizontal', 'vertical'):
+                    seam = seam_carve(img, orientation + ' ' + direction,
+                                      mask=m)[2]
+                    dump(get_seam_coords(seam), fhandle)
+
+
 if __name__ == '__main__':
     if environ.get('CHECKER'):
         # Script is running in testing system
         if len(argv) != 4:
-            print(f'Usage: {argv[0]} mode data_dir output_dir')
+            print('Usage: %s mode data_dir output_dir' % argv[0])
             exit(0)
 
         mode = argv[1]
@@ -87,7 +87,7 @@ if __name__ == '__main__':
     else:
         # Script is running locally, run on dir with tests
         if len(argv) != 2:
-            print(f'Usage: {argv[0]} tests_dir')
+            print('Usage: %s tests_dir' % argv[0])
             exit(0)
 
         from glob import glob
@@ -131,7 +131,7 @@ if __name__ == '__main__':
                 print(test_num, status, '\n', traceback)
                 results.append({'status': status})
             else:
-                print(test_num, f'{running_time:.2f}s', status)
+                print(test_num, '%.2fs' % running_time, status)
                 results.append({
                     'time': running_time,
                     'status': status})

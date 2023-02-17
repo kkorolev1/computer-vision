@@ -63,7 +63,7 @@ def pca_decompression(compressed):
 
 def pca_visualize():
     plt.clf()
-    img = imread('me.jpg')
+    img = imread('cat.jpg')
     if len(img.shape) == 3:
         img = img[..., :3]
     fig, axes = plt.subplots(3, 3)
@@ -475,14 +475,12 @@ def jpeg_decompression(result, result_shape, quantization_matrixes):
 
 def jpeg_visualize():
     plt.clf()
-    img = imread('me.jpg')
+    img = imread('Lenna.png')
     if len(img.shape) == 3:
         img = img[..., :3]
     fig, axes = plt.subplots(2, 3)
     fig.set_figwidth(12)
     fig.set_figheight(12)
-
-    img = img[:(img.shape[0] // 8) * 8, :(img.shape[1] // 8) * 8, :]
 
     for i, p in enumerate([1, 10, 20, 50, 80, 100]):
         # Your code here
@@ -576,5 +574,3 @@ def get_jpeg_metrics_graph():
     plt.clf()
     fig = calc_metrics('Lenna.png', 'jpeg', [1, 10, 20, 50, 80, 100])
     fig.savefig("jpeg_metrics_graph.png")
-
-pca_visualize()

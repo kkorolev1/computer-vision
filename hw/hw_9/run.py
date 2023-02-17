@@ -3,50 +3,41 @@
 from json import dumps, load
 from os import environ
 from os.path import join
-from sys import argv, exit
+from sys import argv
 
 
-def run_single_test(data_dir, output_dir):
-    from align import align
-    from numpy import ndarray
-    from skimage.io import imread, imsave
-    parts = open(join(data_dir, 'g_coord.csv')).read().rstrip('\n').split(',')
-    g_coord = (int(parts[0]), int(parts[1]))
-    img = imread(join(data_dir, 'img.png'), plugin='matplotlib')
+def read_csv(filename):
+    res = {}
+    with open(filename) as fhandle:
+        next(fhandle)
+        for line in fhandle:
+            filename, class_id = line.rstrip('\n').split(',')
+            res[filename] = int(class_id)
+    return res
 
-    n_rows, n_cols = img.shape[:2]
-    min_n_rows, min_n_cols = n_rows / 4.5, n_cols / 1.5
-    aligned_img, (b_row, b_col), (r_row, r_col) = align(img, g_coord)
 
-    assert type(aligned_img) is ndarray, 'aligned image is not ndarray'
-    n_rows, n_cols = aligned_img.shape[:2]
-    assert n_rows > min_n_rows and n_cols > min_n_cols, 'aligned image is too small'
-
-    with open(join(output_dir, 'output.csv'), 'w') as fhandle:
-        print('%d,%d,%d,%d' % (b_row, b_col, r_row, r_col), file=fhandle)
-
-    imsave(join(output_dir, 'aligned_img.png'), aligned_img)
+def save_csv(img_classes, filename):
+    with open(filename, 'w') as fhandle:
+        print('filename,class_id', file=fhandle)
+        for filename in sorted(img_classes.keys()):
+            print('%s,%d' % (filename, img_classes[filename]), file=fhandle)
 
 
 def check_test(data_dir):
+    gt_dir = join(data_dir, 'gt')
+    output_dir = join(data_dir, 'output')
+    output = read_csv(join(output_dir, 'output.csv'))
+    gt = read_csv(join(gt_dir, 'gt.csv'))
 
-    with open(join(data_dir, 'output/output.csv')) as fhandle:
-        parts = fhandle.read().rstrip('\n').split(',')
-        b_row, b_col, r_row, r_col = map(int, parts)
+    correct = 0
+    total = len(gt)
+    for k, v in gt.items():
+        if output[k] == v:
+            correct += 1
 
-    with open(join(data_dir, 'gt/gt.csv')) as fhandle:
-        parts = fhandle.read().rstrip('\n').split(',')
-        coords = map(int, parts[1:])
-        gt_b_row, gt_b_col, _, _, gt_r_row, gt_r_col, diff_max = coords
+    accuracy = correct / total
 
-    diff = abs(b_row - gt_b_row) + abs(b_col - gt_b_col) + \
-        abs(r_row - gt_r_row) + abs(r_col - gt_r_col)
-
-    print(f"DIFF: {diff}")
-    if diff > diff_max:
-        res = 'Wrong answer'
-    else:
-        res = 'Ok'
+    res = 'Ok, accuracy %.4f' % accuracy
     if environ.get('CHECKER'):
         print(res)
     return res
@@ -54,24 +45,67 @@ def check_test(data_dir):
 
 def grade(data_path):
     results = load(open(join(data_path, 'results.json')))
-    ok_count = 0
-    for result in results:
-        if result['status'] == 'Ok':
-            ok_count += 1
-    total_count = len(results)
-    description = '%02d/%02d' % (ok_count, total_count)
-    mark = ok_count / total_count * 10
-    res = {'description': description, 'mark': mark}
+    result = results[-1]['status']
+
+    if not result.startswith('Ok'):
+        res = {'description': '', 'mark': 0}
+    else:
+        accuracy_str = result[13:]
+        accuracy = float(accuracy_str)
+
+        if accuracy >= 0.85:
+            mark = 10
+        elif accuracy >= 0.83:
+            mark = 9
+        elif accuracy >= 0.80:
+            mark = 8
+        elif accuracy >= 0.75:
+            mark = 7
+        elif accuracy >= 0.70:
+            mark = 6
+        elif accuracy >= 0.65:
+            mark = 5
+        elif accuracy >= 0.60:
+            mark = 4
+        elif accuracy >= 0.50:
+            mark = 3
+        elif accuracy >= 0.40:
+            mark = 2
+        elif accuracy > 0:
+            mark = 1
+        else:
+            mark = 0
+
+        res = {'description': accuracy_str, 'mark': mark}
     if environ.get('CHECKER'):
         print(dumps(res))
     return res
+
+
+def run_single_test(data_dir, output_dir):
+    from classification import train_classifier, classify
+    from os.path import abspath, dirname, join
+
+    train_dir = join(data_dir, 'train')
+    test_dir = join(data_dir, 'test')
+
+    train_gt = read_csv(join(train_dir, 'gt.csv'))
+    train_img_dir = join(train_dir, 'images')
+
+    model = train_classifier(train_gt, train_img_dir, fast_train=True)
+
+    code_dir = dirname(abspath(__file__))
+    model_path = join(code_dir, 'birds_model.ckpt')
+    test_img_dir = join(test_dir, 'images')
+    img_classes = classify(model_path, test_img_dir)
+    save_csv(img_classes, join(output_dir, 'output.csv'))
 
 
 if __name__ == '__main__':
     if environ.get('CHECKER'):
         # Script is running in testing system
         if len(argv) != 4:
-            print(f'Usage: {argv[0]} mode data_dir output_dir')
+            print('Usage: %s mode data_dir output_dir' % argv[0])
             exit(0)
 
         mode = argv[1]
@@ -87,7 +121,7 @@ if __name__ == '__main__':
     else:
         # Script is running locally, run on dir with tests
         if len(argv) != 2:
-            print(f'Usage: {argv[0]} tests_dir')
+            print('Usage: %s tests_dir' % argv[0])
             exit(0)
 
         from glob import glob
@@ -131,7 +165,7 @@ if __name__ == '__main__':
                 print(test_num, status, '\n', traceback)
                 results.append({'status': status})
             else:
-                print(test_num, f'{running_time:.2f}s', status)
+                print(test_num, '%.2fs' % running_time, status)
                 results.append({
                     'time': running_time,
                     'status': status})

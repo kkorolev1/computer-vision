@@ -3,7 +3,7 @@
 from json import load, dumps
 from glob import glob
 from os import environ
-from os.path import join
+from os.path import isdir, join
 from sys import argv, exit
 
 
@@ -18,8 +18,8 @@ def check_test(data_dir):
 
 def grade(data_path):
     results = load(open(join(data_path, 'results.json')))
-    max_mark = 4
-    grade_mapping = [2, 2]
+    max_mark = 5
+    grade_mapping = [1, 0.5, 0.5, 1, 1, 0.5, 0.5]
     total_grade = 0
     ok_count = 0
     for result, grade in zip(results, grade_mapping):
@@ -60,10 +60,14 @@ if __name__ == '__main__':
 
         mode = argv[1]
         test_name = argv[2]
+        if not isdir('tests'):
+            print("""Directory `tests` not found
+Please create it and extract there all folders with tests from public_data.zip""")
+            exit(1)
         test_dir = glob(f'tests/[0-9][0-9]_{mode}_{test_name}_input')
         if not test_dir:
             print('Test not found')
             exit(0)
 
         from pytest import main
-        exit(main(['-vv', join(test_dir[0], 'test.py')]))
+        exit(main(['-vvs', join(test_dir[0], 'test.py')]))
